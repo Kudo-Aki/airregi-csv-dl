@@ -3,7 +3,7 @@ name: daily-airregi-csv
 on:
   schedule:
     # JST 17:05 == UTC 08:05
-    - cron: '25 16 * * *'
+    - cron: '45 7 * * *'
   workflow_dispatch:   # 必要なら手動実行ボタン
 
 jobs:
