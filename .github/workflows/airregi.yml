@@ -1,0 +1,32 @@
+name: daily-airregi-csv
+
+on:
+  schedule:
+    # JST 17:05 == UTC 08:05
+    - cron: '5 8 * * *'
+  workflow_dispatch:   # 必要なら手動実行ボタン
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python & libs
+        uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright google-api-python-client google-auth python-dotenv
+          playwright install chromium
+
+      - name: Run script
+        env:
+          AIRREGI_ID:       ${{ secrets.AIRREGI_ID }}
+          AIRREGI_PASS:     ${{ secrets.AIRREGI_PASS }}
+          DRIVE_FOLDER_ID:  ${{ secrets.DRIVE_FOLDER_ID }}
+          SA_JSON:          ${{ secrets.SA_JSON }}
+        run: python airregi_daily.py
+ 
