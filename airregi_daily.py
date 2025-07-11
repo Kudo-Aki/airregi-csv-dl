@@ -1,128 +1,100 @@
 """
-Airレジ 商品別売上 ＋ 日別売上(売上集計) CSV を取得し
-Google ドライブ（個人 My Drive）へアップロード → ログアウト → ブラウザ終了
-─────────────────────────────────────────────
-【GitHub Secrets 必要一覧】
-
-  AIRREGI_ID            : Airレジ ログイン ID
-  AIRREGI_PASS          : Airレジ パスワード
-  DRIVE_FOLDER_ID       : 保存したいフォルダ ID（MyDrive 内の任意フォルダ）
-  OAUTH_CLIENT_ID       : Google Cloud OAuth クライアント ID
-  OAUTH_CLIENT_SECRET   : 同クライアント シークレット
-  OAUTH_REFRESH_TOKEN   : 取得したリフレッシュトークン
-
-【ローカル一括インストール】
-
-  pip install playwright google-auth google-auth-oauthlib \
-               google-api-python-client
-  playwright install chromium
-─────────────────────────────────────────────
+Airレジ CSV 自動取得 → Google Drive(OAuth) へ保存 → ログアウト
+────────────────────────────────────────
+必要 Secrets
+  AIRREGI_ID, AIRREGI_PASS, DRIVE_FOLDER_ID,
+  OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_REFRESH_TOKEN
 """
 
-import os, re, json, tempfile
+import os, re, tempfile
 from datetime import datetime, timezone, timedelta
-
-# Google Drive 用
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-
-# ブラウザ操作
 from playwright.sync_api import sync_playwright
 
-# ─── 定数 ───────────────────────────────────────
+# ─── 定数 ──────────────────────
 JST   = timezone(timedelta(hours=9))
 TODAY = datetime.now(JST).strftime("%Y%m%d")
-
 LOGIN_URL = "https://connect.airregi.jp/login?client_id=ARG"
 PROD_URL  = "https://airregi.jp/CLP//view/salesListByMenu/"
 KPI_URL   = "https://airregi.jp/CLP//view/salesList/#/"
 
-# ─── Google Drive アップロード ───────────────────
-def upload_to_drive(local_path: str, file_name: str, folder_id: str) -> None:
-    """OAuth2（人間ユーザー権限）で個人ドライブへアップロード"""
+# ─── Drive アップロード ────────
+def upload_to_drive(path, name, folder):
     creds = Credentials(
         None,
         refresh_token=os.getenv("OAUTH_REFRESH_TOKEN"),
         client_id=os.getenv("OAUTH_CLIENT_ID"),
         client_secret=os.getenv("OAUTH_CLIENT_SECRET"),
         token_uri="https://oauth2.googleapis.com/token",
-        scopes=["https://www.googleapis.com/auth/drive.file"],
-    )
-    creds.refresh(Request())                                 # access_token 更新
+        scopes=["https://www.googleapis.com/auth/drive.file"])
+    creds.refresh(Request())
 
     drive = build("drive", "v3", credentials=creds)
-    media = MediaFileUpload(local_path, mimetype="text/csv", resumable=False)
-    meta  = {"name": file_name, "parents": [folder_id]}
+    media = MediaFileUpload(path, mimetype="text/csv", resumable=False)
+    meta  = {"name": name, "parents": [folder]}
     drive.files().create(body=meta, media_body=media, fields="id").execute()
-    print(f"✔ Drive: {file_name}")
+    print(f"✔ Drive: {name}")
 
-# ─── Playwright helper ──────────────────────────
-def click_when(page, sel: str, timeout: int = 60000) -> None:
+# ─── Playwright helper ─────────
+def click_when(page, sel, timeout=60_000):
     page.wait_for_selector(sel, timeout=timeout)
     page.click(sel)
 
-def download_csv(page, sel: str, save_as: str, timeout: int = 120000) -> None:
-    with page.expect_download(timeout=timeout) as dl_info:
+def download_csv(page, sel, save_as):
+    with page.expect_download(timeout=120_000) as dl:
         page.click(sel)
-    dl_info.value.save_as(save_as)
+    dl.value.save_as(save_as)
     print(f"  ✔ DL: {os.path.basename(save_as)}")
 
-# ─── メイン ────────────────────────────────────
-def main() -> None:
-    uid   = os.getenv("AIRREGI_ID")
-    pw    = os.getenv("AIRREGI_PASS")
+# ─── メイン ────────────────────
+def main():
+    uid = os.getenv("AIRREGI_ID"); pw = os.getenv("AIRREGI_PASS")
     folder = os.getenv("DRIVE_FOLDER_ID")
-    oauth_vars = [os.getenv(k) for k in
-                  ("OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET", "OAUTH_REFRESH_TOKEN")]
-
-    if not all([uid, pw, folder, *oauth_vars]):
-        raise SystemExit("❌ Secrets が不足しています。README を参照してください。")
+    if not all([uid, pw, folder,
+                os.getenv("OAUTH_CLIENT_ID"),
+                os.getenv("OAUTH_CLIENT_SECRET"),
+                os.getenv("OAUTH_REFRESH_TOKEN")]):
+        raise SystemExit("Secrets が不足しています")
 
     with tempfile.TemporaryDirectory() as tmp, sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(accept_downloads=True)
-        page = ctx.new_page()
+        page = p.chromium.launch(headless=True)\
+                    .new_context(accept_downloads=True).new_page()
 
-        # ① ログイン
-        page.goto(LOGIN_URL, timeout=60000)
-        page.fill("#account", uid)
-        page.fill("#password", pw)
+        # ログイン
+        page.goto(LOGIN_URL, timeout=60_000)
+        page.fill("#account", uid); page.fill("#password", pw)
         page.click("input.primary")
-        page.wait_for_url(re.compile(r"/(view/top|dashboard)"), timeout=60000)
+        page.wait_for_url(re.compile(r"/(view/top|dashboard)"), timeout=60_000)
 
-        # ② 商品別売上
+        # 商品別売上
         page.goto(PROD_URL)
-        click_when(page, "#btnSearch")        # 検索
-        click_when(page, ".btn-CSV-DL")       # CSV ボタン出現
+        click_when(page, "#btnSearch"); click_when(page, ".btn-CSV-DL")
         download_csv(page, ".btn-CSV-DL",
                      f"{tmp}/商品別売上_{TODAY}-{TODAY}.csv")
 
-        # ③ サイドバー → 日別売上
+        # 日別売上
         click_when(page, 'a[data-sc="LinkSalesList"]')
-        page.wait_for_url(re.compile(r"/view/salesList/?"), timeout=60000)
-
-        # ④ 日別売上 CSV（青→緑の 2 段階）
+        page.wait_for_url(re.compile(r"/view/salesList"), timeout=60_000)
         click_when(page, "button.pull-right.csv-download-button")
         click_when(page, "button.salse-csv-dl")
         download_csv(page, "button.salse-csv-dl",
                      f"{tmp}/売上集計_{TODAY}.csv")
 
-        # ⑤ Google Drive へアップロード
+        # Drive へ
         for fn in os.listdir(tmp):
             upload_to_drive(os.path.join(tmp, fn), fn, folder)
 
-        # ⑥ ログアウト
+        # ログアウト（URL ではなくフォーム出現を待つ）
         click_when(page, "li.cmn-hdr-account")
         click_when(page, "a.cmn-hdr-logout-link")
-        page.wait_for_url(re.compile(r"/login"), timeout=60000)
+        page.wait_for_selector("#account", timeout=60_000)
         print("✔ ログアウト完了")
 
-        ctx.close()
-        browser.close()
+        page.context.close(); page.context.browser.close()
         print("✔ すべて完了しました")
 
-# ───────────────────────────────────────────────
 if __name__ == "__main__":
     main()
