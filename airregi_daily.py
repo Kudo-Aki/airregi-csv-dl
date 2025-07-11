@@ -15,6 +15,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.auth.transport.requests import Request
 from playwright.sync_api           import sync_playwright
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from googleapiclient.http import MediaFileUpload
 
 # ─── 定数 ───────────────────────────────────────
 JST   = timezone(timedelta(hours=9))
@@ -26,6 +29,7 @@ KPI_URL   = "https://airregi.jp/CLP//view/salesList/#/"
 
 # ─── Google Drive アップロード ───────────────────
 def upload_to_drive(local_path, file_name, folder_id):
+    """OAuth2（人間ユーザー権限）で個人ドライブへアップロード"""
     creds = Credentials(
         None,
         refresh_token=os.getenv("OAUTH_REFRESH_TOKEN"),
@@ -34,7 +38,7 @@ def upload_to_drive(local_path, file_name, folder_id):
         token_uri="https://oauth2.googleapis.com/token",
         scopes=["https://www.googleapis.com/auth/drive.file"],
     )
-    creds.refresh(Request())   # ← access_token を取得
+    creds.refresh(Request())                    # access_token 取得
 
     drive = build("drive", "v3", credentials=creds)
     media = MediaFileUpload(local_path, mimetype="text/csv", resumable=False)
