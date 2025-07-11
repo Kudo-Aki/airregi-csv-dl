@@ -2,7 +2,7 @@
 Airレジ 商品別売上 & 日別売上(売上集計) CSV を取得し
 Google ドライブへアップロード → ログアウト → ブラウザ終了
 ──────────────────────────────────
-必要 Secrets:
+Secrets:
   AIRREGI_ID, AIRREGI_PASS, DRIVE_FOLDER_ID, SA_JSON
 pip install playwright google-api-python-client google-auth
 playwright install chromium
@@ -12,9 +12,10 @@ import os, re, json, tempfile
 from datetime import datetime, timezone, timedelta
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery     import build
+from googleapiclient.http          import MediaFileUpload     # ←★追加
 from playwright.sync_api           import sync_playwright
 
-# ─── 共通定数 ────────────────────────────────────
+# ─── 定数 ───────────────────────────────────────
 JST   = timezone(timedelta(hours=9))
 TODAY = datetime.now(JST).strftime("%Y%m%d")
 
@@ -23,21 +24,20 @@ PROD_URL  = "https://airregi.jp/CLP//view/salesListByMenu/"
 KPI_URL   = "https://airregi.jp/CLP//view/salesList/#/"
 
 # ─── Google Drive アップロード ───────────────────
-def upload_to_drive(path, name, folder_id, sa_json):
+def upload_to_drive(local_path, file_name, folder_id, sa_json):
     creds = Credentials.from_service_account_info(
         json.loads(sa_json),
         scopes=["https://www.googleapis.com/auth/drive.file"]
     )
     drive = build("drive", "v3", credentials=creds)
-    meta  = {"name": name, "parents": [folder_id]}
-    media = {"mimeType": "text/csv", "body": open(path, "rb")}
-    drive.files().create(body=meta, media_body=media).execute()
-    print(f"✔ Drive: {name}")
+    media = MediaFileUpload(local_path, mimetype="text/csv", resumable=False)
+    meta  = {"name": file_name, "parents": [folder_id]}
+    drive.files().create(body=meta, media_body=media, fields="id").execute()
+    print(f"✔ Drive: {file_name}")
 
-# ─── Playwright ユーティリティ ──────────────────
+# ─── Playwright helper ─────────────────────────
 def click_when(page, sel, timeout=60000):
-    page.wait_for_selector(sel, timeout=timeout)
-    page.click(sel)
+    page.wait_for_selector(sel, timeout=timeout); page.click(sel)
 
 def download_csv(page, sel, save_as, timeout=120000):
     with page.expect_download(timeout=timeout) as dl_info:
@@ -45,7 +45,7 @@ def download_csv(page, sel, save_as, timeout=120000):
     dl_info.value.save_as(save_as)
     print(f"  ✔ DL: {os.path.basename(save_as)}")
 
-# ─── メイン処理 ──────────────────────────────────
+# ─── メイン ────────────────────────────────────
 def main():
     uid, pw  = os.getenv("AIRREGI_ID"), os.getenv("AIRREGI_PASS")
     folder, sj = os.getenv("DRIVE_FOLDER_ID"), os.getenv("SA_JSON")
@@ -54,33 +54,30 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp, sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        ctx     = browser.new_context(accept_downloads=True)
-        page    = ctx.new_page()
+        ctx, page = browser.new_context(accept_downloads=True), None
+        page = ctx.new_page()
 
         # ① ログイン
         page.goto(LOGIN_URL, timeout=60000)
-        page.fill("#account", uid)
-        page.fill("#password", pw)
+        page.fill("#account", uid); page.fill("#password", pw)
         page.click("input.primary")
         page.wait_for_url(re.compile(r"/(view/top|dashboard)"), timeout=60000)
 
         # ② 商品別売上
         page.goto(PROD_URL)
-        click_when(page, "#btnSearch")          # デフォルト日付で検索
+        click_when(page, "#btnSearch")
         click_when(page, ".btn-CSV-DL")
-        download_csv(page,
-                     ".btn-CSV-DL",
+        download_csv(page, ".btn-CSV-DL",
                      f"{tmp}/商品別売上_{TODAY}-{TODAY}.csv")
 
         # ③ サイドバー → 日別売上
         click_when(page, 'a[data-sc="LinkSalesList"]')
         page.wait_for_url(re.compile(r"/view/salesList/?"), timeout=60000)
 
-        # ④ 青ボタンを押し、緑ボタン出現を待つ
+        # ④ 青ボタン → 緑ボタン
         click_when(page, "button.pull-right.csv-download-button")
-        click_when(page, "button.salse-csv-dl")   # まだダウンロードしない
-        download_csv(page,
-                     "button.salse-csv-dl",
+        click_when(page, "button.salse-csv-dl")
+        download_csv(page, "button.salse-csv-dl",
                      f"{tmp}/売上集計_{TODAY}.csv")
 
         # ⑤ Drive へアップロード
@@ -95,6 +92,6 @@ def main():
 
         ctx.close(); browser.close(); print("✔ 完了")
 
-# ────────────────────────────────────────────────
+# ───────────────────────────────────────────────
 if __name__ == "__main__":
     main()
