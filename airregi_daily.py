@@ -10,9 +10,10 @@ playwright install chromium
 
 import os, re, json, tempfile
 from datetime import datetime, timezone, timedelta
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery     import build
-from googleapiclient.http          import MediaFileUpload     # ←★追加
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google.auth.transport.requests import Request
 from playwright.sync_api           import sync_playwright
 
 # ─── 定数 ───────────────────────────────────────
@@ -24,11 +25,17 @@ PROD_URL  = "https://airregi.jp/CLP//view/salesListByMenu/"
 KPI_URL   = "https://airregi.jp/CLP//view/salesList/#/"
 
 # ─── Google Drive アップロード ───────────────────
-def upload_to_drive(local_path, file_name, folder_id, sa_json):
-    creds = Credentials.from_service_account_info(
-        json.loads(sa_json),
-        scopes=["https://www.googleapis.com/auth/drive.file"]
+def upload_to_drive(local_path, file_name, folder_id):
+    creds = Credentials(
+        None,
+        refresh_token=os.getenv("OAUTH_REFRESH_TOKEN"),
+        client_id=os.getenv("OAUTH_CLIENT_ID"),
+        client_secret=os.getenv("OAUTH_CLIENT_SECRET"),
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=["https://www.googleapis.com/auth/drive.file"],
     )
+    creds.refresh(Request())   # ← access_token を取得
+
     drive = build("drive", "v3", credentials=creds)
     media = MediaFileUpload(local_path, mimetype="text/csv", resumable=False)
     meta  = {"name": file_name, "parents": [folder_id]}
