@@ -1,15 +1,15 @@
 """
-Airレジ 商品別売上 & 売上集計 CSV を毎日 1 回だけ取得し
-Google ドライブ指定フォルダへアップロードするスクリプト
+Airレジ 商品別売上 + 日別売上(集計・詳細) CSV を取得し
+Google ドライブへアップロード後、ログアウトしてブラウザを閉じる
 ──────────────────────────────────
-■ 事前準備（GitHub Actions の Secrets 等）
-  AIRREGI_ID        : Airレジログイン ID
-  AIRREGI_PASS      : Airレジログイン PW
-  DRIVE_FOLDER_ID   : アップロード先フォルダ ID
-  SA_JSON           : Google サービスアカウント JSON 文字列
+■ 必要 Secrets / 環境変数
+  AIRREGI_ID        : Airレジ ログイン ID
+  AIRREGI_PASS      : Airレジ パスワード
+  DRIVE_FOLDER_ID   : 置きたいフォルダ ID
+  SA_JSON           : サービスアカウント鍵 JSON 文字列
+──────────────────────────────────
 pip install playwright google-api-python-client google-auth
 playwright install chromium
-──────────────────────────────────
 """
 
 import os, re, json, tempfile
@@ -20,7 +20,7 @@ from playwright.sync_api           import sync_playwright
 
 # ─── 定数 ───────────────────────────────────────
 JST   = timezone(timedelta(hours=9))
-TODAY = datetime.now(JST).strftime("%Y%m%d")
+TODAY = datetime.now(JST).strftime("%Y%m%d")  # 例: 20250711
 
 LOGIN_URL = "https://connect.airregi.jp/login?client_id=ARG"
 PROD_URL  = "https://airregi.jp/CLP//view/salesListByMenu/"
@@ -38,33 +38,11 @@ def upload_to_drive(local_path, file_name, folder_id, sa_json):
     drive.files().create(body=meta, media_body=media).execute()
     print(f"✔ Drive にアップ: {file_name}")
 
-# ─── ログイン ───────────────────────────────────
-def login(page, uid, pw):
-    page.goto(LOGIN_URL, timeout=60000)
-    page.fill("#account", uid)
-    page.fill("#password", pw)
-    page.click("input.primary")
-    page.wait_for_url(re.compile(r"/(view/top|dashboard)"), timeout=60000)
+# ─── Playwright ユーティリティ ─────────────────
+def wait_and_click(page, selector, timeout=60000):
+    page.wait_for_selector(selector, timeout=timeout)
+    page.click(selector)
 
-# ─── カレンダーを指定日に合わせる ───────────────
-def set_calendar(page, ymd):
-    y, m, d = int(ymd[:4]), int(ymd[4:6]), int(ymd[6:])
-    page.click(".input-container")
-    while True:
-        txt = page.text_content(".dates .switch")  # '2025年07月'
-        yy, mm = int(txt[:4]), int(txt[5:7])
-        if (yy, mm) == (y, m):
-            break
-        page.click("//tr[contains(@class,'movement')]/td[1]" if (yy, mm) > (y, m)
-                   else "//tr[contains(@class,'movement')]/td[last()]")
-        page.wait_for_timeout(300)
-    sel = (f"//table[contains(@class,'dates-table')]"
-           f"//td[not(contains(@class,'old')) and not(contains(@class,'new'))]/div[text()='{d}']")
-    page.click(sel)
-    page.click(sel)
-    page.click(".btn-confirm")
-
-# ─── 汎用 DL ───────────────────────────────────
 def download_csv(page, click_sel, save_as, timeout=120000):
     with page.expect_download(timeout=timeout) as dl_info:
         page.click(click_sel)
@@ -73,47 +51,60 @@ def download_csv(page, click_sel, save_as, timeout=120000):
 
 # ─── メイン ───────────────────────────────────
 def main():
-    uid, pw  = os.getenv("AIRREGI_ID"), os.getenv("AIRREGI_PASS")
-    folder, sj = os.getenv("DRIVE_FOLDER_ID"), os.getenv("SA_JSON")
-    if not all([uid, pw, folder, sj]):
+    uid = os.getenv("AIRREGI_ID")
+    pw  = os.getenv("AIRREGI_PASS")
+    folder_id = os.getenv("DRIVE_FOLDER_ID")
+    sa_json   = os.getenv("SA_JSON")
+    if not all([uid, pw, folder_id, sa_json]):
         raise SystemExit("Secrets が不足しています。")
 
     with tempfile.TemporaryDirectory() as tmp, sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         ctx     = browser.new_context(accept_downloads=True)
         page    = ctx.new_page()
-        login(page, uid, pw)
 
-        # ① 商品別売上
+        # ── ① ログイン ────────────────────────
+        page.goto(LOGIN_URL, timeout=60000)
+        page.fill("#account", uid)
+        page.fill("#password", pw)
+        page.click("input.primary")
+        page.wait_for_url(re.compile(r"/(view/top|dashboard)"), timeout=60000)
+
+        # ── ② 商品別売上 ────────────────────
         page.goto(PROD_URL)
-        set_calendar(page, TODAY)
-        page.click("#btnSearch")                       # ←★検索
-        page.wait_for_selector(".btn-CSV-DL", timeout=60000)
-        download_csv(page, ".btn-CSV-DL",
+        wait_and_click(page, "#btnSearch")                # デフォルト日付で検索
+        wait_and_click(page, ".btn-CSV-DL")               # CSV ボタンが出現
+        download_csv(page,
+                     ".btn-CSV-DL",
                      f"{tmp}/商品別売上_{TODAY}-{TODAY}.csv")
 
-        # ② 売上集計  ←★新: 検索→CSV を 2 回
-        page.goto(KPI_URL)
-        set_calendar(page, TODAY)
-        page.click("#btnSearch")
-        page.wait_for_selector("button.pull-right.csv-download-button",
-                               timeout=60000)
-        # 集計 CSV
+        # ── ③ ナビメニューから日別売上へ遷移 ─────
+        # a[data-sc="LinkSalesList"] がサイドメニューの「日別売上」
+        wait_and_click(page, 'a[data-sc="LinkSalesList"]')
+        page.wait_for_url(re.compile(r"/view/salesList/?"), timeout=60000)
+
+        # ── ④ 日別売上 CSV（集計 + 詳細）────────
         download_csv(page,
                      "button.pull-right.csv-download-button",
                      f"{tmp}/売上集計_{TODAY}.csv")
-        # 詳細 CSV
         download_csv(page,
                      "button.salse-csv-dl",
                      f"{tmp}/売上集計詳細_{TODAY}.csv")
 
-        # ③ Drive アップロード
+        # ── ⑤ Drive へアップロード ─────────────
         for fn in os.listdir(tmp):
-            upload_to_drive(os.path.join(tmp, fn), fn, folder, sj)
+            upload_to_drive(os.path.join(tmp, fn), fn, folder_id, sa_json)
+
+        # ── ⑥ ログアウト ─────────────────────
+        wait_and_click(page, "li.cmn-hdr-account")
+        wait_and_click(page, "a.cmn-hdr-logout-link")
+        page.wait_for_url(re.compile(r"/login"), timeout=60000)
+        print("✔ ログアウト完了")
 
         ctx.close()
         browser.close()
+        print("✔ ブラウザを閉じました")
 
-# ──────────────────────────────────────────────
+# ─── エントリーポイント ──────────────────────
 if __name__ == "__main__":
     main()
