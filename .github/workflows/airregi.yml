@@ -27,8 +27,6 @@ jobs:
           AIRREGI_ID:       ${{ secrets.AIRREGI_ID }}
           AIRREGI_PASS:     ${{ secrets.AIRREGI_PASS }}
           DRIVE_FOLDER_ID:  ${{ secrets.DRIVE_FOLDER_ID }}
-          OAUTH_CLIENT_ID:      ${{ secrets.OAUTH_CLIENT_ID }}
-          OAUTH_CLIENT_SECRET:  ${{ secrets.OAUTH_CLIENT_SECRET }}
-          OAUTH_REFRESH_TOKEN:  ${{ secrets.OAUTH_REFRESH_TOKEN }}
+          GDRIVE_SA_JSON: ${{ secrets.GDRIVE_SA_JSON }}
         run: python airregi_daily.py
  
