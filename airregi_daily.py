@@ -71,6 +71,7 @@ def main():
         page.goto(LOGIN_URL, timeout=60_000)
         page.fill("#account", uid); page.fill("#password", pw)
         page.click("input.primary")
+        page.click("storeList__list__innerBox")
         page.wait_for_url(re.compile(r"/(view/top|dashboard)"), timeout=60_000)
 
         # ② 商品別売上
